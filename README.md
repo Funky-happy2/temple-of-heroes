@@ -18,14 +18,30 @@ off disk for a no-server, offline game.
 
 ## Online play
 
-With a database attached the game becomes shared:
+With a database attached the game becomes genuinely multiplayer:
+
+- **Live players in one world** — a WebSocket at `/live` broadcasts positions at 12Hz.
+  You see everyone else moving in real time, wearing their own hero, tier and colours.
+- **Real PvP** — you can fight other players anywhere outside the plaza. Each client is
+  authoritative for its own health: hits are reported, the server validates range and
+  location, then relays the damage to the victim, who decides whether it kills them.
+  Player damage has its own short 110ms window so a fast hero out-duels a slow one, while
+  monster damage keeps the longer 320ms window that stops mob pile-ons from shredding you.
+- **The sanctuary** — the plaza is absolute. Monsters cannot walk in (they prowl the
+  perimeter instead), hostile projectiles die at the wall, no PvP damage lands inside, and
+  it slowly heals you. The server enforces this too, so it cannot be bypassed by a client.
+
+Plus the shared persistence:
 
 - **Cloud saves** — your progress follows your name, not your browser. The name is claimed by the
   first browser to use it and protected by a token kept in that browser's `localStorage`.
+  (One browser profile holds one identity, since the token lives in per-origin storage.)
 - **A real bounty board** — every player's bounty is stored server-side and shown to everyone.
-- **Hunt real people** — players carrying a bounty spawn in your danger zones wearing *their* hero,
-  tier and colours. Take one down and the server moves their bounty into your wallet and hands you
-  35% of it as fresh heat on your own head.
+  Nothing on the board is fake: there are no simulated rivals, only real people.
+- **Hunt real people** — kill a bountied player, live or as an offline stand-in, and the server
+  moves their bounty into your wallet and hands you 35% of it as fresh heat on your own head.
+  An offline player's stand-in wears their saved hero, tier and colours; it is never spawned for
+  someone who is currently connected, because you can just go and fight them.
 - **Fund bounties on real players** — pay credits to put a price on any name on the leaderboard.
 - **Shared killfeed and leaderboard** — fusions, final-tier upgrades and bounty claims broadcast to
   everyone.
@@ -95,7 +111,7 @@ answers.
 
 | File | What's in it |
 |---|---|
-| `server.js` | Express API + static host: sessions, cloud saves, bounty transactions, feed |
+| `server.js` | Express API + WebSocket relay + static host: sessions, saves, PvP, bounties |
 | `db/schema.sql`, `db/init.js` | Postgres schema and its one-shot installer |
 | `render.yaml` | Render Blueprint (free plan, health check, `DATABASE_URL` as a secret) |
 | `public/index.html` | Page shell, HUD, panel container |

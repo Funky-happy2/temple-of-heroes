@@ -105,3 +105,93 @@ const NET = {
     }
   }
 };
+
+/* ============================================================
+   LIVE MULTIPLAYER CLIENT
+   Peers are interpolated between 12Hz snapshots. Each client is
+   authoritative for its own health, so damage is relayed, not simulated.
+   ============================================================ */
+NET.peers = new Map();          // name -> {x,y,tx,ty,walk,moving,aimx,hero,tier,hp,max,bounty,look}
+NET.ws = null;
+NET.liveState = 'off';          // off | connecting | live
+NET.lastSend = 0;
+
+NET.connectLive = function(){
+  if(!this.name || !this.token) return;
+  if(this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) return;
+  let url;
+  try {
+    url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/live';
+  } catch(e){ return; }
+  this.liveState = 'connecting';
+  let ws;
+  try { ws = new WebSocket(url); } catch(e){ this.liveState = 'off'; return; }
+  this.ws = ws;
+
+  ws.onopen = () => ws.send(JSON.stringify({ type:'hello', name:this.name, token:this.token }));
+
+  ws.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch(e){ return; }
+    switch(m.type){
+      case 'welcome':
+        this.liveState = 'live';
+        if(typeof this.onLive === 'function') this.onLive(m.count);
+        break;
+      case 'denied':
+        this.liveState = 'off';
+        try { ws.close(); } catch(e){}
+        break;
+      case 'snapshot': {
+        const seen = new Set();
+        for(const p of m.players){
+          if(p.n === this.name) continue;
+          seen.add(p.n);
+          let q = this.peers.get(p.n);
+          if(!q){
+            q = { x:p.x, y:p.y, tx:p.x, ty:p.y, walk:0, moving:false, aimx:1,
+                  hero:p.h, tier:p.t, hp:p.hp, max:p.mx, bounty:p.b, look:p.lk||{} };
+            this.peers.set(p.n, q);
+          }
+          q.tx = p.x; q.ty = p.y; q.walk = p.w; q.moving = !!p.m; q.aimx = p.a;
+          q.hero = p.h; q.tier = p.t; q.hp = p.hp; q.max = p.mx;
+          q.bounty = p.b; q.look = p.lk || q.look;
+        }
+        for(const n of [...this.peers.keys()]) if(!seen.has(n)) this.peers.delete(n);
+        break;
+      }
+      case 'joined': if(typeof this.onPeerEvent === 'function') this.onPeerEvent('joined', m); break;
+      case 'bye':    this.peers.delete(m.name);
+                     if(typeof this.onPeerEvent === 'function') this.onPeerEvent('bye', m); break;
+      case 'hurt':   if(typeof this.onHurt === 'function') this.onHurt(m.from, m.dmg); break;
+      case 'kill':   if(typeof this.onKill === 'function') this.onKill(m.killer, m.victim); break;
+    }
+  };
+
+  ws.onclose = () => {
+    this.liveState = 'off'; this.peers.clear();
+    // come back when the tab is still alive and the session is still ours
+    if(this.name) setTimeout(() => this.connectLive(), 4000);
+  };
+  ws.onerror = () => { try { ws.close(); } catch(e){} };
+};
+
+NET.sendState = function(o){
+  if(this.liveState !== 'live' || !this.ws || this.ws.readyState !== 1) return;
+  const now = performance.now();
+  if(now - this.lastSend < 80) return;           // ~12Hz
+  this.lastSend = now;
+  try { this.ws.send(JSON.stringify({ type:'state', ...o })); } catch(e){}
+};
+NET.sendHit = function(target, dmg){
+  if(this.liveState !== 'live' || !this.ws || this.ws.readyState !== 1) return;
+  try { this.ws.send(JSON.stringify({ type:'hit', target, dmg })); } catch(e){}
+};
+NET.sendDied = function(killer){
+  if(this.liveState !== 'live' || !this.ws || this.ws.readyState !== 1) return;
+  try { this.ws.send(JSON.stringify({ type:'died', killer })); } catch(e){}
+};
+NET.disconnectLive = function(){
+  this.name = null;
+  if(this.ws){ try { this.ws.close(); } catch(e){} this.ws = null; }
+  this.peers.clear(); this.liveState = 'off';
+};

@@ -33,7 +33,7 @@ function freshState(){
            cloths:['red','blue','green','yellow','purple','black','white','orange'],
            acc:['none'], trail:['none'], face:['neutral','smile']},
     counters:{killBandit:0,killMonster:0,killBounty:0,killBoss:0,damage:0,ults:0,pickup:0,upgrades:0,anykill:0,zones:0,streak:0},
-    zonesSeen:[], tasks:[], npcs:[],
+    zonesSeen:[], tasks:[],
     stats:{kills:0,deaths:0,best:0,streak:0,earned:0},
     tut:{temple:false}
   };
@@ -127,6 +127,25 @@ addEventListener('blur',()=>{ mouse.down=false; for(const k in keys) keys[k]=fal
    WORLD
    ============================================================ */
 const CENTER = {x:WORLD.w/2, y:WORLD.h/2};
+/* the sanctuary: hostiles cannot enter and no PvP damage lands inside */
+const SAFE = (()=>{ const z=ZONES.find(v=>v.id==='plaza');
+  return {x:z.x, y:z.y, w:z.w, h:z.h, x2:z.x+z.w, y2:z.y+z.h}; })();
+function inSafe(x, y, pad){
+  const p = pad||0;
+  return x > SAFE.x-p && x < SAFE.x2+p && y > SAFE.y-p && y < SAFE.y2+p;
+}
+/* shove a hostile back out to the nearest edge of the sanctuary */
+function keepOutOfSafe(e, pad){
+  const p = pad||0;
+  if(!inSafe(e.x, e.y, p)) return false;
+  const dl = e.x-(SAFE.x-p), dr = (SAFE.x2+p)-e.x, dt2 = e.y-(SAFE.y-p), db = (SAFE.y2+p)-e.y;
+  const m = Math.min(dl, dr, dt2, db);
+  if(m===dl){ e.x = SAFE.x-p; if(e.vx>0) e.vx=-Math.abs(e.vx)*.4; }
+  else if(m===dr){ e.x = SAFE.x2+p; if(e.vx<0) e.vx=Math.abs(e.vx)*.4; }
+  else if(m===dt2){ e.y = SAFE.y-p; if(e.vy>0) e.vy=-Math.abs(e.vy)*.4; }
+  else { e.y = SAFE.y2+p; if(e.vy<0) e.vy=Math.abs(e.vy)*.4; }
+  return true;
+}
 const TEMPLES = HEROES.map((h,i)=>{
   const a = -Math.PI/2 + i/HEROES.length * Math.PI*2;
   return {heroId:h.id, x:CENTER.x + Math.cos(a)*560, y:CENTER.y + Math.sin(a)*380, a};
@@ -177,7 +196,7 @@ function zoneAt(x,y){
    ============================================================ */
 let P = null;
 let ents=[], shots=[], parts=[], drops=[], fx=[], pets=[];
-let running=false, last=0, t=0, spawnT=0, simT=0, saveT=0;
+let running=false, last=0, t=0, spawnT=0, saveT=0;
 
 function makePlayer(){
   const h = curHero(), st = h ? heroStats(h, curTier()) : {hp:130,dmg:8,spd:2.0,cd:1};
@@ -200,21 +219,6 @@ function myAtk(){
   return ATK[h ? h.atk : 'melee'];
 }
 
-/* ---------- NPC bounty roster ---------- */
-function seedNPCs(){
-  if(S.npcs && S.npcs.length) return;
-  S.npcs = [];
-  const names = NPC_NAMES.slice().sort(()=>Math.random()-.5);
-  for(let i=0;i<16;i++){
-    S.npcs.push({
-      name:names[i], hero:pick(HEROES).id, tier:ri(0,4),
-      bounty: Math.random()<0.55 ? ri(3,26)*100 : 0,
-      kills:ri(0,40), by: Math.random()<.5?'GAME':'PLAYER', alive:true, cool:0
-    });
-  }
-}
-function npcByName(n){ return S.npcs.find(x=>x.name===n); }
-
 function spawnEnemy(type, x, y, zone){
   const d = ENEMIES[type];
   const lv = zone ? zone.lvl : 1;
@@ -229,7 +233,7 @@ function spawnEnemy(type, x, y, zone){
   };
   ents.push(e); return e;
 }
-function spawnNPC(rec, x, y, hunter){
+function spawnRealPlayer(rec, x, y, hunter){
   const h = heroById(rec.hero) || HEROES[0];
   const st = heroStats(h, rec.tier);
   const e = {
@@ -260,6 +264,28 @@ function shoot(owner, x, y, ang, opts){
     });
   }
 }
+/* live players you are allowed to fight: both of you outside the sanctuary */
+function pvpTargets(){
+  const out = [];
+  if(NET.liveState !== 'live' || !P || inSafe(P.x, P.y)) return out;
+  for(const [name, q] of NET.peers){
+    // test the authoritative snapshot position too — the interpolated one can
+    // lag outside the wall and invite shots the server will refuse anyway
+    if(q.hp <= 0 || inSafe(q.x, q.y) || inSafe(q.tx, q.ty)) continue;
+    out.push({ name, q });
+  }
+  return out;
+}
+/* report damage on a live player and show the feedback locally */
+function hitPeer(name, q, dmg, ang){
+  NET.sendHit(name, dmg);
+  q.hp = Math.max(0, q.hp - dmg);          // optimistic, corrected by the next snapshot
+  if(fx.length < 26)
+    fx.push({t:'txt', x:q.x+rnd(-9,9), y:q.y-58, txt:Math.round(dmg), col:'#ff9d6b', life:.6, vy:-38});
+  for(let i=0;i<3;i++)
+    parts.push({x:q.x, y:q.y-24, vx:rnd(-2,2), vy:rnd(-3,1), life:.35, max:.35, col:'#ffb0b0', size:2.4});
+}
+
 function nearestEnemy(x,y,maxd){
   let b=null, bd=maxd||1e9;
   for(const e of ents){ const d=Math.hypot(e.x-x,e.y-y); if(d<bd){bd=d;b=e;} }
@@ -351,6 +377,14 @@ function playerAttack(){
         if(da < arc/2) dmgEnemy(e, dmg*spec.dmgMul*(P.buffT>0?1.6:1), spec.knock, ea);
       }
     }
+    for(const {name, q} of pvpTargets()){
+      const d = Math.hypot(q.x-P.x, q.y-P.y);
+      if(d < reach + 16){
+        const ea = Math.atan2(q.y-P.y, q.x-P.x);
+        let da = Math.abs(((ea-ang+Math.PI*3)%(Math.PI*2))-Math.PI);
+        if(da < arc/2) hitPeer(name, q, dmg*spec.dmgMul*(P.buffT>0?1.6:1), ea);
+      }
+    }
     parts.push({x:P.x+Math.cos(ang)*reach*.7, y:P.y-26+Math.sin(ang)*reach*.7, vx:0,vy:0,
       life:.16,max:.16,col:'#fff',size:5});
   } else {
@@ -377,6 +411,8 @@ function useUlt(){
         const d = Math.hypot(e.x-P.x,e.y-P.y);
         if(d<280) dmgEnemy(e, st.dmg*6.5, 22, Math.atan2(e.y-P.y,e.x-P.x));
       }
+      for(const {name, q} of pvpTargets())
+        if(Math.hypot(q.x-P.x,q.y-P.y)<280) hitPeer(name, q, st.dmg*6.5, 0);
       if(h.id==='marvel'||h.name.includes('Marvel')){ P.hp = P.max; toast('Binary: fully restored.','good'); }
       shake(14); break;
     }
@@ -418,15 +454,22 @@ function useUlt(){
 }
 
 /* ---------- damage to player ---------- */
-function hurtPlayer(amount, from){
+function hurtPlayer(amount, from, pvp){
   if(!P.alive || P.invT>0) return;
+  // Timestamped i-frames: a backgrounded tab throttles rAF, so a dt-based timer
+  // would leave the player permanently invulnerable. Player damage gets its own
+  // shorter window, otherwise a fast hero duels no better than a slow one.
+  const now = performance.now();
+  const key = pvp ? 'pvpLockUntil' : 'hurtLockUntil';
+  if(now < (P[key]||0)) return;
+  P[key] = now + (pvp ? 110 : 320);
   P.hp -= amount; P.hitFlash = .16; shake(4);
-  P.invT = Math.max(P.invT, 0.32);          // i-frames: a mob pile can't shred you in one tick
   fx.push({t:'txt', x:P.x+rnd(-10,10), y:P.y-52, txt:'-'+Math.round(amount), col:'#ff6b6b', life:.7, vy:-30});
   if(P.hp<=0) die(from);
 }
 function die(from){
   P.alive=false; P.hp=0;
+  NET.sendDied(from || '');
   const lost = Math.round(S.cash*0.25);
   S.cash -= lost; S.stats.deaths++; S.stats.streak=0;
   const wasHeat = S.heat; S.heat = 0; S.heatPending = 0; S.heatWipe = true;
@@ -481,10 +524,14 @@ async function cloudSync(){
   }catch(e){ netBadge(); }
   finally{ syncing = false; }
 }
+let _badgeTxt='';
 function netBadge(){
   const el=$('hudNet'); if(!el) return;
-  el.className = 'net' + (NET.online ? ' on' : (NET.status==='taken' ? ' bad' : ''));
-  el.innerHTML = '● <b>'+(NET.online ? 'online' : (NET.status==='taken' ? 'name taken' : 'local'))+'</b>';
+  el.className = 'net' + (NET.liveState==='live' || NET.online ? ' on' : (NET.status==='taken' ? ' bad' : ''));
+  const n = NET.peers ? NET.peers.size : 0;
+  const txt = NET.liveState==='live' ? ('live · '+(n+1))
+            : NET.online ? 'online' : (NET.status==='taken' ? 'name taken' : 'local');
+  if(txt !== _badgeTxt){ _badgeTxt = txt; el.innerHTML = '● <b>'+txt+'</b>'; }
   el.title = NET.online ? 'Connected — progress saves to the cloud and the bounty board is shared'
                         : 'Offline — playing from this browser only';
 }
@@ -568,15 +615,20 @@ function update(dt){
     const dx=P.x-e.x, dy=P.y-e.y, d=Math.hypot(dx,dy)||1;
     const want = e.shoot ? e.range*0.72 : e.r+18;
     let mx=0,my=0;
-    if(P.alive){
+    const playerSafe = inSafe(P.x, P.y);
+    if(P.alive && !playerSafe){
       if(d > want){ mx=dx/d; my=dy/d; }
       else if(d < want*0.6){ mx=-dx/d; my=-dy/d; }
       else { mx=-dy/d*0.6; my=dx/d*0.6; }
+    } else if(playerSafe){
+      // prowl the perimeter instead of pressing against the wall
+      mx = Math.cos(t*0.6 + e.walk)*0.45; my = Math.sin(t*0.5 + e.walk)*0.45;
     }
     e.vx += (mx*e.spd*60 - e.vx)*clamp(dt*6,0,1);
     e.vy += (my*e.spd*60 - e.vy)*clamp(dt*6,0,1);
     e.x += e.vx*dt; e.y += e.vy*dt;
     e.x = clamp(e.x,10,WORLD.w-10); e.y = clamp(e.y,20,WORLD.h-10);
+    if(keepOutOfSafe(e, 6)) e.atWall = true; else e.atWall = false;
     e.moving = Math.hypot(e.vx,e.vy)>16;
     e.walk += dt*(e.moving?8:0);
     e.aimx = Math.sign(dx);
@@ -589,7 +641,7 @@ function update(dt){
       if(od>0 && od < e.r+o.r){ const f=(e.r+o.r-od)/od*0.5; e.x-=ox*f*0.5; e.y-=oy*f*0.5; }
     }
 
-    if(P.alive && e.atkT<=0){
+    if(P.alive && !playerSafe && e.atkT<=0){
       if(e.shoot && d < e.range){
         e.atkT = e.kind==='npc' ? .55 : .95;
         const spec = e.kind==='npc' ? ATK[(e.hero&&ATK[e.hero.atk]&&ATK[e.hero.atk].kind==='shot')?e.hero.atk:'beam'] : ATK.beam;
@@ -624,8 +676,23 @@ function update(dt){
     if(s.trail && Math.random()<.7)
       parts.push({x:s.x,y:s.y,vx:0,vy:0,life:.22,max:.22,col:s.col,size:s.r*0.7});
     if(s.life<=0 || s.x<0||s.y<0||s.x>WORLD.w||s.y>WORLD.h){ shots.splice(i,1); continue; }
+    if(s.owner==='e' && inSafe(s.x, s.y)){        // nothing hostile crosses the wall
+      for(let k=0;k<4;k++) parts.push({x:s.x,y:s.y,vx:rnd(-1,1),vy:rnd(-1,1),life:.3,max:.3,col:'#ffcb45',size:2});
+      shots.splice(i,1); continue;
+    }
 
     if(s.owner==='p'){
+      let consumed = false;
+      for(const {name, q} of pvpTargets()){
+        if(s.hits.includes('@'+name)) continue;
+        if(Math.hypot(q.x-s.x, (q.y-26)-s.y) < 17+s.r){
+          s.hits.push('@'+name);
+          hitPeer(name, q, s.dmg, Math.atan2(s.vy,s.vx));
+          if(s.pierce<=0){ shots.splice(i,1); consumed = true; break; }
+          s.pierce--;
+        }
+      }
+      if(consumed) continue;
       for(const e of ents.slice()){
         if(s.hits.includes(e)) continue;
         if(Math.hypot(e.x-s.x, (e.y-26)-s.y) < e.r+s.r){
@@ -672,6 +739,7 @@ function update(dt){
       if(f.delay<=0 && !f.done){
         f.done=true; f.life=.4;
         for(const e of ents.slice()) if(Math.hypot(e.x-f.x,e.y-f.y)<70) dmgEnemy(e, f.dmg, 8, Math.atan2(e.y-f.y,e.x-f.x));
+        for(const {name, q} of pvpTargets()) if(Math.hypot(q.x-f.x,q.y-f.y)<70) hitPeer(name, q, f.dmg, 0);
         for(let k=0;k<8;k++) parts.push({x:f.x,y:f.y,vx:rnd(-3,3),vy:rnd(-4,0),life:.4,max:.4,col:f.col,size:3});
       }
       if(f.done){ f.life-=dt; if(f.life<=0) fx.splice(i,1); }
@@ -694,81 +762,46 @@ function update(dt){
       const table = z.spawn || ['bandit'];
       let sx,sy,tries=0;
       do{ sx = z.x + Math.random()*z.w; sy = z.y + Math.random()*z.h; tries++; }
-      while(Math.hypot(sx-P.x,sy-P.y) < 340 && tries<24);
+      while((Math.hypot(sx-P.x,sy-P.y) < 340 || inSafe(sx, sy, 30)) && tries<24);
+      if(inSafe(sx, sy, 30)) return;
       let type = pick(table);
       if(z.lvl>=3 && Math.random()<0.05) type='brute';
       spawnEnemy(type, sx, sy, z);
       const fxs = ents[ents.length-1];
       fx.push({t:'ring',x:fxs.x,y:fxs.y-16,r:4,max:30,col:'#ffffff55',life:.35});
     }
-    // bounty players wander the danger zones — real people get first claim on the slots
-    let realSpawned = false;
+    // only real people carry bounties, and only they show up as hunt targets
     const npcs = ents.filter(e=>e.kind==='npc');
-    const npcCount = npcs.length;
-    const realCount = npcs.filter(e=>e.real).length;
-    if(NET.online && realCount < 2 && npcCount < 3 && NET.world.bounties.length && Math.random()<0.5){
+    if(NET.online && npcs.length < 2 && NET.world.bounties.length && Math.random()<0.5){
       const real = pick(NET.world.bounties);
-      if(real && !ents.some(e=>e.name===real.name)){
-        const a=Math.random()*7;
-        const e = spawnNPC({name:real.name, hero:real.hero||pick(HEROES).id,
-                            tier:clamp(real.hero_tier||0,0,7), bounty:Number(real.bounty)||0},
-          clamp(P.x+Math.cos(a)*430,z.x,z.x+z.w), clamp(P.y+Math.sin(a)*430,z.y,z.y+z.h));
-        e.real = true;
-        if(real.look && real.look.face){
-          e.look.face = real.look.face;
-          if(real.look.acc) e.look.acc = real.look.acc;
-          const sk = SKIN_COLORS.find(c=>c.id===real.look.skin); if(sk) e.look.skin = sk.c;
-        }
-        toast('REAL PLAYER nearby: '+real.name+'  ($'+fmt(e.bounty)+')','bad');
-        realSpawned = true;
-      }
-    }
-    if(!realSpawned && npcCount < 2 && Math.random() < (NET.online ? 0.12 : 0.30)){
-      const cand = S.npcs.filter(n=>n.alive!==false && n.bounty>0);
-      if(cand.length){
-        const rec = pick(cand);
-        if(!ents.some(e=>e.kind==='npc'&&e.name===rec.name)){
-          const a=Math.random()*7;
-          spawnNPC(rec, clamp(P.x+Math.cos(a)*430,z.x,z.x+z.w), clamp(P.y+Math.sin(a)*430,z.y,z.y+z.h));
-          toast('Bountied player nearby: '+rec.name+'  ($'+fmt(rec.bounty)+')','info');
+      if(real && real.name !== NET.name && !NET.peers.has(real.name) && !ents.some(e=>e.name===real.name)){
+        let sx2, sy2, tries2=0;
+        do{ const a=Math.random()*7;
+            sx2 = clamp(P.x+Math.cos(a)*430, z.x, z.x+z.w);
+            sy2 = clamp(P.y+Math.sin(a)*430, z.y, z.y+z.h); tries2++;
+        } while(inSafe(sx2, sy2, 30) && tries2<20);
+        if(!inSafe(sx2, sy2, 30)){
+          const e = spawnRealPlayer({name:real.name, hero:real.hero||pick(HEROES).id,
+                              tier:clamp(real.hero_tier||0,0,7), bounty:Number(real.bounty)||0}, sx2, sy2);
+          e.real = true;
+          if(real.look){
+            if(real.look.face) e.look.face = real.look.face;
+            if(real.look.acc)  e.look.acc  = real.look.acc;
+            const sk = SKIN_COLORS.find(c=>c.id===real.look.skin); if(sk) e.look.skin = sk.c;
+          }
+          toast('Bountied player nearby: '+real.name+'  ($'+fmt(e.bounty)+')','bad');
         }
       }
-    }
-    // hunters come for YOUR bounty
-    if(S.heat>250 && !ents.some(e=>e.hunter) && Math.random()<0.22){
-      const rec = pick(S.npcs);
-      const a=Math.random()*7;
-      const h = spawnNPC({name:rec.name+' [HUNTER]', hero:pick(HEROES).id, tier:clamp(curTier()+1,0,7), bounty:0},
-        clamp(P.x+Math.cos(a)*400,20,WORLD.w-20), clamp(P.y+Math.sin(a)*400,20,WORLD.h-20), true);
-      h.cash = Math.round(S.heat*0.4);
-      toast('A bounty hunter is tracking you!','bad');
-      feed('<b>'+h.name+'</b> is hunting <b>you</b> for $'+fmt(S.heat));
     }
   }
-  if(z.safe){ // plaza is a sanctuary
-    for(let i=ents.length-1;i>=0;i--) if(Math.hypot(ents[i].x-P.x,ents[i].y-P.y)>200) ents.splice(i,1);
-    if(P.alive && P.hp < P.max){ P.hp = Math.min(P.max, P.hp + P.max*0.14*dt); }
+  if(z.safe && P.alive && P.hp < P.max){        // the plaza mends you; nothing is deleted
+    P.hp = Math.min(P.max, P.hp + P.max*0.14*dt);
+    if(Math.random() < dt*7)
+      parts.push({x:P.x+rnd(-13,13), y:P.y-rnd(4,40), vx:0, vy:-.5, life:.7, max:.7,
+                  col:'#8fffc0', size:2.6});
   }
   if(z.id!=='road' && !z.safe && !S.zonesSeen.includes(z.id)){
     S.zonesSeen.push(z.id); S.counters.zones = S.zonesSeen.length; checkTasks();
-  }
-
-  /* ---- background world sim: NPCs killing NPCs raises bounties ---- */
-  simT -= dt;
-  if(simT<=0){
-    simT = rnd(14,26);
-    const live = S.npcs.filter(n=>n.alive!==false);
-    if(live.length>2){
-      const a=pick(live); let b=pick(live); let g2=0;
-      while(b===a && g2++<9) b=pick(live);
-      if(a!==b){
-        a.kills++; a.bounty += ri(2,9)*100;
-        feed('<b>'+a.name+'</b> eliminated <b>'+b.name+'</b>  <span class="badge">$'+fmt(a.bounty)+'</span>');
-        b.cool = t + rnd(20,50); b.alive=false;
-      }
-    }
-    for(const n of S.npcs) if(n.alive===false && t>n.cool){ n.alive=true; if(Math.random()<.5) n.bounty += ri(1,6)*100; }
-    if(panelOpen==='bounty') renderPanel('bounty');
   }
 
   /* ---- camera ---- */
@@ -781,6 +814,11 @@ function update(dt){
   mouse.wy = mouse.y + cam.y - VH/2;
 
   document.getElementById('zoneName').textContent = z.n + (z.safe?'  ·  SAFE':'  ·  DANGER LV'+z.lvl);
+  // interpolate peers toward their latest snapshot
+  for(const q of NET.peers.values()){
+    q.x += (q.tx - q.x) * clamp(dt*11, 0, 1);
+    q.y += (q.ty - q.y) * clamp(dt*11, 0, 1);
+  }
   saveT -= dt; if(saveT<=0){ saveT=8; save(); cloudSync(); }
   hudSync();
 }
@@ -900,11 +938,13 @@ function render(){
   /* entity sort by y */
   const drawList = ents.slice();
   if(P.alive) drawList.push(P);
+  for(const [name, q] of NET.peers) drawList.push({peer:true, name, q, x:q.x, y:q.y});
   drawList.sort((a,b)=>a.y-b.y);
 
   for(const e of drawList){
     if(!vis(e.x,e.y,90)) continue;
     if(e===P) drawPlayer();
+    else if(e.peer) drawPeer(e.name, e.q);
     else drawEnemy(e);
   }
 
@@ -1211,7 +1251,7 @@ function drawBoard(){
   for(let i=0;i<7;i++){ g.beginPath(); g.moveTo(x-60,y-100+i*9.5); g.lineTo(x+60,y-100+i*9.5); g.stroke(); }
   g.restore();
   // posters
-  const live=(S.npcs||[]).filter(n=>n.bounty>0).slice(0,3);
+  const live=(NET.online ? NET.world.bounties : []).slice(0,3);
   live.forEach((n,i)=>{
     const px = x-46+i*35, py = y-95;
     g.save(); g.translate(px+15, py+22); g.rotate((i-1)*0.05); g.translate(-15,-22);
@@ -1266,6 +1306,44 @@ function drawPlayer(){
     g.fillStyle=gg; g.beginPath(); g.arc(P.x,P.y-26,r,0,7); g.fill();
     g.strokeStyle='rgba(200,225,255,.75)'; g.lineWidth=1.6;
     g.beginPath(); g.arc(P.x,P.y-26,r,0,7); g.stroke();
+  }
+}
+
+/* another human, live in the world */
+function drawPeer(name, q){
+  const h = heroById(q.hero);
+  const L = q.look || {};
+  const skin = (SKIN_COLORS.find(c=>c.id===L.skin)||SKIN_COLORS[0]).c;
+  const shirt= (CLOTH_COLORS.find(c=>c.id===L.shirt)||CLOTH_COLORS[0]).c;
+  const pants= (CLOTH_COLORS.find(c=>c.id===L.pants)||CLOTH_COLORS[1]).c;
+  const safe = inSafe(q.x, q.y);
+
+  drawFigure(g, q.x, q.y, {
+    scale:1, skin, shirt, pants, face:L.face||'smile', acc:L.acc||'none',
+    suit:h?h.suit:null, accent:h?h.accent:null, trim:h?h.trim:null,
+    glow:h?h.glow:null, helmet:h?h.helmet:'none',
+    moving:q.moving, walk:q.walk, aimx:q.aimx
+  });
+
+  // health
+  const w=46, hp=clamp(q.hp/(q.max||1),0,1), yy=q.y-64;
+  g.fillStyle='rgba(6,9,15,.72)'; roundRect(q.x-w/2-1.5, yy-1.5, w+3, 8, 4); g.fill();
+  const bg=g.createLinearGradient(q.x-w/2,0,q.x+w/2,0);
+  bg.addColorStop(0,'#5ac8ff'); bg.addColorStop(1,'#57e08a');
+  g.fillStyle=bg; roundRect(q.x-w/2, yy, Math.max(2,w*hp), 5, 2.5); g.fill();
+
+  // name plate — live players are marked so they read apart from AI
+  let label = name + (q.bounty>0 ? '  \u2620$'+fmt(q.bounty) : '');
+  g.font='bold 10px Verdana'; g.textAlign='center';
+  const tw=g.measureText(label).width+26;
+  g.fillStyle='rgba(6,9,15,.66)'; roundRect(q.x-tw/2, yy-17, tw, 14, 4); g.fill();
+  g.fillStyle = safe ? '#8fe3ff' : (q.bounty>0 ? '#ffcb45' : '#9dffc0');
+  g.beginPath(); g.arc(q.x-tw/2+8, yy-10, 3, 0, 7); g.fill();
+  g.fillStyle = safe ? '#cfefff' : (q.bounty>0 ? '#ffe6a8' : '#dff7e6');
+  g.fillText(label, q.x+4, yy-6);
+  if(safe){                                   // a shield mark while they are protected
+    g.strokeStyle='rgba(143,227,255,.5)'; g.lineWidth=1.4;
+    g.beginPath(); g.arc(q.x, q.y-28, 30, 0, 7); g.stroke();
   }
 }
 
@@ -1335,6 +1413,10 @@ function drawMinimap(){
     mg.fillStyle = e.kind==='npc' ? (e.hunter?'#ff5a5a':'#ffcb45') : '#ff8f6b';
     mg.fillRect(e.x*sx-1.4, e.y*sy-1.4, 2.8, 2.8);
   }
+  for(const q of NET.peers.values()){
+    mg.fillStyle = q.bounty>0 ? '#ffcb45' : '#5ac8ff';
+    mg.beginPath(); mg.arc(q.x*sx, q.y*sy, 2.4, 0, 7); mg.fill();
+  }
   mg.fillStyle='#57e08a'; mg.beginPath(); mg.arc(P.x*sx, P.y*sy, 3, 0, 7); mg.fill();
   mg.strokeStyle='rgba(255,255,255,.18)'; mg.lineWidth=1;
   mg.strokeRect((cam.x-VW/2)*sx,(cam.y-VH/2)*sy, VW*sx, VH*sy);
@@ -1370,6 +1452,7 @@ function hudSync(){
   $('hudHeroName').textContent = h ? h.name : 'No Hero';
   $('hudTierName').textContent = h ? (heroTierName(h,curTier())+'  ·  Tier '+(curTier()+1)+'/'+TIERS_PER_HERO)
                                    : 'Visit a temple to claim one';
+  netBadge();
   const hp = P?clamp(P.hp/P.max,0,1):1;
   $('hpFill').style.width = (hp*100)+'%';
   $('hpText').textContent = Math.max(0,Math.ceil(P?P.hp:0))+' / '+(P?P.max:0);
@@ -1397,6 +1480,39 @@ function feed(html){
   while($('killfeed').children.length>5) $('killfeed').firstChild.remove();
 }
 
+/* ---------- live multiplayer callbacks ---------- */
+NET.onLive = function(count){
+  netBadge();
+  toast(count>1 ? ('Live: '+count+' players in the world right now.') : 'Live — you are the only one here so far.','good');
+};
+NET.onPeerEvent = function(kind, m){
+  if(kind==='joined') feed('<b>'+esc(m.name)+'</b> entered the world');
+};
+NET.onHurt = function(from, dmg){
+  if(!P || !P.alive) return;
+  if(inSafe(P.x, P.y)) return;                 // the sanctuary holds
+  P.lastAttacker = from;
+  hurtPlayer(dmg, from, true);
+};
+NET.onKill = function(killer, victim){
+  const me = NET.name || S.name;
+  if(victim === me) return;              // our own death is announced locally
+  feed('<b>'+esc(killer)+'</b> took down <b>'+esc(victim)+'</b>');
+  if(killer === me) claimFrom(victim);   // we landed the last hit — collect
+};
+function claimFrom(victim){
+  NET.claim(victim).then(r=>{
+    if(!r || !r.ok) return;
+    if(r.prize > 0){
+      S.cash = Number(r.cash); S.heat = Number(r.bounty);
+      toast('Bounty collected on '+victim+': +$'+fmt(r.prize),'good');
+    } else {
+      toast('You took down '+victim+', but they carried no bounty.','info');
+    }
+    hudSync();
+  }).catch(()=>{});
+}
+
 /* ---------- events happening to other real players ---------- */
 NET.onFeed = function(f){
   const A='<b>'+esc(f.actor)+'</b>', T=f.target?'<b>'+esc(f.target)+'</b>':'';
@@ -1407,6 +1523,17 @@ NET.onFeed = function(f){
   else if(f.kind==='joined')    feed(A+' entered the plaza');
 };
 function esc(t){ return String(t==null?'':t).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* Position goes out on a timer rather than from the render loop: a
+   background tab throttles rAF hard, and a player who stops broadcasting
+   would freeze in place on everyone else's screen while still being hittable. */
+setInterval(() => {
+  if(!running || !P || !P.alive || NET.liveState !== 'live') return;
+  const h = curHero();
+  NET.sendState({ x:Math.round(P.x), y:Math.round(P.y), w:+P.walk.toFixed(2),
+                  m:P.moving?1:0, a:P.aimx, h:h?h.id:'', t:curTier(),
+                  hp:Math.round(P.hp), mx:Math.round(P.max), b:S.heat, lk:S.look });
+}, 90);
 
 /* ============================================================
    LOOP
@@ -1885,21 +2012,9 @@ function renderPanel(which, arg){
       html += '<div class="note" style="border-left-color:var(--red)">Offline — you are playing this browser\'s local save, so the board below is simulated. Connect to the server to see real players, fund real bounties and appear on the leaderboard.</div>';
     }
 
-    html += '<div class="section-title">SIMULATED RIVALS</div>';
-    html += '<table class="lb"><tr><th>PLAYER</th><th>HERO</th><th>KILLS</th><th>BOUNTY</th><th>SET BY</th><th>FUND A BOUNTY</th></tr>';
-    html += '<tr class="me"><td><b>'+S.name+'</b> (you)</td><td>'+(curHero()?curHero().name:'—')+'</td>'+
-            '<td>'+S.stats.kills+'</td><td class="price">$'+fmt(S.heat)+'</td><td>'+(S.heat?'GAME':'—')+'</td><td>—</td></tr>';
-    const sorted=(S.npcs||[]).slice().sort((a,b)=>b.bounty-a.bounty);
-    for(const n of sorted){
-      const h=heroById(n.hero)||HEROES[0];
-      html += '<tr><td>'+n.name+(n.alive===false?' <span class="td" style="color:#8b9ab5">(down)</span>':'')+'</td>'+
-        '<td>'+h.name+' T'+(n.tier+1)+'</td><td>'+n.kills+'</td>'+
-        '<td>'+(n.bounty?'<span class="badge">$'+fmt(n.bounty)+'</span>':'—')+'</td>'+
-        '<td class="td">'+(n.bounty?n.by:'—')+'</td>'+
-        '<td><button class="act" style="margin:0;padding:5px 8px;width:auto" data-a="bounty" data-k="'+n.name+'" data-v="500">+$500</button> '+
-            '<button class="act" style="margin:0;padding:5px 8px;width:auto" data-a="bounty" data-k="'+n.name+'" data-v="2500">+$2,500</button></td></tr>';
+    if(!NET.online){
+      html += '<div class="note">Bounties are carried by real players only, so you need a connection to see them.</div>';
     }
-    html += '</table>';
     break;
   }
 
@@ -2014,7 +2129,6 @@ panelBody.addEventListener('click', e=>{
     case 'look': equipLook(el.dataset.f,k); break;
     case 'noown': toast('Locked — buy it in the Shop.','bad'); break;
     case 'claimtask': claimTask(k); break;
-    case 'bounty': placeBounty(k, +el.dataset.v); break;
     case 'rbounty': placeRealBounty(k, +el.dataset.v); break;
     case 'pickfuse':
       if(fuseA===k) fuseA=null;
@@ -2038,7 +2152,7 @@ panelBody.addEventListener('click', e=>{
 async function startGame(){
   const typed = (document.getElementById('playerName').value.trim() || S.name || 'Hero');
   S.name = typed.slice(0,16);
-  seedNPCs(); ensureTasks();
+  ensureTasks();
   P = makePlayer(); refreshPlayerStats(false);
   cam.x=P.x; cam.y=P.y;
   document.getElementById('start').classList.add('hidden');
@@ -2063,12 +2177,13 @@ async function startGame(){
     S.counters = Object.assign(f.counters, d.state.counters||{});
     S.stats = Object.assign(f.stats, d.state.stats||{});
     S.name = typed.slice(0,16);
-    seedNPCs(); ensureTasks();
+    ensureTasks();
     P = makePlayer(); refreshPlayerStats(false);
     P.x=CENTER.x; P.y=CENTER.y+120; cam.x=P.x; cam.y=P.y;
     toast('Cloud save restored.','good');
   }
   S.heat = Number(d.player.bounty)||0; S.heatPending = 0;
+  NET.connectLive();
   toast('Connected — the bounty board is shared with every other player.','good');
   hudSync(); save();
 }
@@ -2076,13 +2191,13 @@ document.getElementById('btnPlay').onclick=startGame;
 document.getElementById('playerName').addEventListener('keydown',e=>{ if(e.key==='Enter') startGame(); });
 document.getElementById('btnRespawn').onclick=respawn;
 document.getElementById('btnWipe').onclick=()=>{
-  localStorage.removeItem(SAVE_KEY); S=freshState(); seedNPCs(); ensureTasks();
+  localStorage.removeItem(SAVE_KEY); S=freshState(); ensureTasks();
   document.getElementById('playerName').value='';
   alert('Save wiped.');
 };
 (function boot(){
   const had = load();
-  seedNPCs(); ensureTasks();
+  ensureTasks();
   if(had) document.getElementById('playerName').value = S.name;
   P = makePlayer();
   hudSync();

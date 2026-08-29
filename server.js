@@ -5,10 +5,13 @@
 
 const path    = require('path');
 const crypto  = require('crypto');
+const http    = require('http');
 const express = require('express');
+const { WebSocketServer } = require('ws');
 const { Pool } = require('pg');
 
 const app  = express();
+const live = new Map();                    // ws -> live player record
 const PORT = process.env.PORT || 3000;
 
 /* ---------- database ---------- */
@@ -272,8 +275,128 @@ app.post('/api/announce', requireDb, rateLimit(30, 60000), async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Announce failed.' }); }
 });
 
+app.get('/api/live', (req, res) =>
+  res.json({ online: live.size, names: [...live.values()].map(p => p.name) }));
+
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-app.listen(PORT, () => {
-  console.log(`[boot] Temple of Heroes listening on :${PORT}  (db: ${pool ? 'on' : 'off'})`);
+/* ============================================================
+   LIVE MULTIPLAYER  (WebSocket)
+   Players broadcast their position; hits are relayed to the victim,
+   who is authoritative for its own health and death.
+   ============================================================ */
+const SAFE = { x: 900, y: 700, x2: 2300, y2: 1700 };          // the plaza sanctuary
+const inSafe = (x, y) => x > SAFE.x && x < SAFE.x2 && y > SAFE.y && y < SAFE.y2;
+
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/live', maxPayload: 8 * 1024 });
+
+function sendTo(ws, type, data){
+  if(ws.readyState === 1){ try { ws.send(JSON.stringify({ type, ...data })); } catch(e){} }
+}
+function broadcast(type, data, except){
+  const msg = JSON.stringify({ type, ...data });
+  for(const ws of live.keys()){
+    if(ws === except || ws.readyState !== 1) continue;
+    try { ws.send(msg); } catch(e){}
+  }
+}
+function byName(name){
+  const k = String(name || '').toLowerCase();
+  for(const [ws, p] of live) if(p.name.toLowerCase() === k) return [ws, p];
+  return [null, null];
+}
+
+wss.on('connection', ws => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
+  ws.on('message', async raw => {
+    let m; try { m = JSON.parse(raw); } catch(e){ return; }
+    const me = live.get(ws);
+
+    if(m.type === 'hello'){
+      if(me) return;
+      if(!pool) return sendTo(ws, 'denied', { reason: 'Server has no database.' });
+      const p = await auth(m.name, m.token).catch(() => null);
+      if(!p) return sendTo(ws, 'denied', { reason: 'Could not verify that save.' });
+      // one connection per player
+      const [oldWs] = byName(p.name);
+      if(oldWs){ try { oldWs.close(); } catch(e){} live.delete(oldWs); }
+      live.set(ws, {
+        name: p.name, x: 1600, y: 1320, walk: 0, moving: false, aimx: 1,
+        hero: p.hero || '', tier: p.hero_tier || 0, hp: 100, max: 100,
+        bounty: Number(p.bounty) || 0, look: p.look || {}, hits: 0, hitWindow: Date.now()
+      });
+      sendTo(ws, 'welcome', { name: p.name, count: live.size });
+      broadcast('joined', { name: p.name }, ws);
+      return;
+    }
+
+    if(!me) return;                                            // everything else needs a hello
+
+    if(m.type === 'state'){
+      me.x = +m.x || 0; me.y = +m.y || 0;
+      me.walk = +m.w || 0; me.moving = !!m.m; me.aimx = +m.a || 0;
+      me.hero = String(m.h || '').slice(0, 40); me.tier = Math.max(0, Math.min(7, m.t | 0));
+      me.hp = +m.hp || 0; me.max = +m.mx || 1;
+      me.bounty = Math.max(0, +m.b || 0);
+      if(m.lk && typeof m.lk === 'object') me.look = m.lk;
+      return;
+    }
+
+    if(m.type === 'hit'){
+      const now = Date.now();
+      if(now - me.hitWindow > 1000){ me.hitWindow = now; me.hits = 0; }
+      if(++me.hits > 25) return;                               // flood guard
+      const [tws, target] = byName(m.target);
+      if(!tws || target === me) return;
+      if(inSafe(me.x, me.y) || inSafe(target.x, target.y)) return;   // no PvP in the sanctuary
+      const dist = Math.hypot(me.x - target.x, me.y - target.y);
+      if(dist > 900) return;                                   // must plausibly be in range
+      const dmg = Math.max(0, Math.min(+m.dmg || 0, target.max * 0.35, 4000));
+      if(dmg <= 0) return;
+      sendTo(tws, 'hurt', { from: me.name, dmg });
+      return;
+    }
+
+    if(m.type === 'died'){
+      const killer = String(m.killer || '').slice(0, 16);
+      broadcast('kill', { killer, victim: me.name });
+      me.bounty = 0;
+      return;
+    }
+  });
+
+  ws.on('close', () => {
+    const me = live.get(ws);
+    live.delete(ws);
+    if(me) broadcast('bye', { name: me.name });
+  });
+  ws.on('error', () => { live.delete(ws); });
+});
+
+/* position snapshots at 12Hz */
+setInterval(() => {
+  if(!live.size) return;
+  const players = [];
+  for(const p of live.values())
+    players.push({ n: p.name, x: Math.round(p.x), y: Math.round(p.y),
+                   w: +p.walk.toFixed(2), m: p.moving ? 1 : 0, a: p.aimx,
+                   h: p.hero, t: p.tier, hp: Math.round(p.hp), mx: Math.round(p.max),
+                   b: p.bounty, lk: p.look });
+  broadcast('snapshot', { players });
+}, 84);
+
+/* drop dead sockets */
+setInterval(() => {
+  for(const ws of live.keys()){
+    if(!ws.isAlive){ try { ws.terminate(); } catch(e){} live.delete(ws); continue; }
+    ws.isAlive = false; try { ws.ping(); } catch(e){}
+  }
+}, 30000);
+
+
+server.listen(PORT, () => {
+  console.log(`[boot] Temple of Heroes listening on :${PORT}  (db: ${pool ? 'on' : 'off'}, live: on)`);
 });
