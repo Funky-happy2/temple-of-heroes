@@ -114,7 +114,7 @@ addEventListener('keydown',e=>{
   if(overlayOpen() || !running) return;
   if(k===' ') { e.preventDefault(); useUlt(); }
   if(k==='e') interact();
-  const map={t:'temples',u:'upgrade',f:'fusion',j:'tasks',b:'bounty',p:'shop',c:'settings'};
+  const map={t:'temples',u:'upgrade',f:'fusion',j:'tasks',b:'bounty',p:'shop',c:'settings',l:'ranks'};
   if(map[k] && running) openPanel(map[k]);
 });
 addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
@@ -1743,6 +1743,7 @@ const overlay=$('overlay'), panelBody=$('panelBody'), panelTitle=$('panelTitle')
 function overlayOpen(){ return !overlay.classList.contains('hidden'); }
 function openPanel(which, arg){
   panelOpen=which; panelArg=arg;
+  if(which==='ranks' && NET.online) loadBoard(lbBoard);
   overlay.classList.remove('hidden');
   renderPanel(which, arg);
 }
@@ -2029,6 +2030,44 @@ function renderPanel(which, arg){
     break;
   }
 
+  /* ---------------- LEADERBOARDS ---------------- */
+  case 'ranks': {
+    panelTitle.textContent='LEADERBOARDS';
+    if(!NET.online){
+      html = '<div class="note" style="border-left-color:var(--red)">Leaderboards need an account. Sign out and sign in to join the rankings.</div>';
+      break;
+    }
+    const b = lbCache;
+    html += '<div class="boardtabs">' +
+      (b && b.boards ? b.boards : [{k:'kills',label:'Kills'}]).map(x =>
+        '<button data-a="board" data-k="'+x.k+'" class="'+(lbBoard===x.k?'on':'')+'">'+esc(x.label)+'</button>').join('') +
+      '</div>';
+    if(!b){ html += '<div class="note">Loading the rankings…</div>'; break; }
+    html += '<div class="note">Ranked by <b>'+esc(b.label)+'</b>. Only players with a score above zero appear.</div>';
+    if(!b.rows.length){
+      html += '<div class="note">Nobody has scored on this board yet — be the first.</div>';
+    } else {
+      html += '<table class="lb"><tr><th>#</th><th>PLAYER</th><th>HERO</th><th>K / D</th><th>STREAK</th><th style="text-align:right">'+esc(b.label.toUpperCase())+'</th></tr>';
+      for(const r of b.rows){
+        const meRow = NET.name && r.name.toLowerCase()===NET.name.toLowerCase();
+        const rk = +r.rank;
+        html += '<tr class="'+(meRow?'me ':'')+(rk<=3?('top'+rk):'')+'">'+
+          '<td class="rank">'+(rk===1?'🥇':rk===2?'🥈':rk===3?'🥉':'#'+rk)+'</td>'+
+          '<td><b>'+esc(r.name)+'</b>'+(meRow?' (you)':'')+'</td>'+
+          '<td>'+esc(r.hero_name||'—')+' T'+((r.hero_tier|0)+1)+'</td>'+
+          '<td>'+(r.kills|0)+' / '+(r.deaths|0)+'</td>'+
+          '<td>'+(r.best_streak|0)+'</td>'+
+          '<td class="val">'+lbValue(b, r)+'</td></tr>';
+      }
+      html += '</table>';
+    }
+    if(b.me){
+      html += '<div class="myrank"><span>Your position on <b>'+esc(b.label)+'</b></span>'+
+              '<span><b>#'+(+b.me.rank)+'</b> &nbsp;·&nbsp; '+lbValue(b, b.me)+'</span></div>';
+    }
+    break;
+  }
+
   /* ---------------- SHOP ---------------- */
   case 'shop': {
     panelTitle.textContent='THE SHOP';
@@ -2052,6 +2091,10 @@ function renderPanel(which, arg){
         '<div class="section-title">NAME</div>'+
         '<input id="nameInput" maxlength="16" value="'+S.name.replace(/"/g,'')+'" style="width:100%;background:#0b1018;border:2px solid var(--line);border-radius:9px;color:var(--ink);padding:9px;font:13px Verdana;text-align:center">'+
         '<button class="act" data-a="rename">SAVE NAME</button>'+
+        (NET.online
+          ? '<div class="section-title">ACCOUNT</div><div class="sub">Signed in as <b>'+esc(NET.name)+'</b></div>'+
+            '<button class="act" data-a="signout">SIGN OUT</button>'
+          : '<div class="section-title">ACCOUNT</div><div class="sub">Playing offline on this browser.</div>')+
         '<div class="note" style="margin-top:12px">Your suit colours come from the hero you have equipped. Skin, expression, accessory and trail are always yours.</div>'+
       '</div>'+
       '<div style="flex:1;min-width:330px">'+
@@ -2067,6 +2110,31 @@ function renderPanel(which, arg){
   }
   panelBody.innerHTML=html;
   mountFigures();
+}
+
+let lbBoard='kills', lbCache=null, lbLoading=false;
+function lbValue(b, r){
+  const raw = b.board==='kills' ? r.kills : b.board==='cash' ? r.cash
+            : b.board==='tier' ? r.top_tier : b.board==='streak' ? r.best_streak
+            : b.board==='bounty' ? r.bounty_earned : b.board==='wanted' ? r.bounty
+            : b.board==='fusions' ? r.fusions : r.playtime;
+  if(b.fmt==='cash')  return '$'+fmt(raw);
+  if(b.fmt==='hours') return ((Number(raw)||0)/3600).toFixed(1)+' h';
+  if(b.fmt==='tier')  return 'Tier '+(Number(raw)||0)+'/8';
+  return fmt(raw);
+}
+function loadBoard(board){
+  if(lbLoading) return;
+  if(board) lbBoard = board;
+  lbLoading = true; lbCache = null;
+  if(panelOpen==='ranks') renderPanel('ranks');
+  NET.leaderboard(lbBoard).then(d => {
+    lbCache = d; lbLoading = false;
+    if(panelOpen==='ranks') renderPanel('ranks');
+  }).catch(() => {
+    lbLoading = false;
+    if(panelOpen==='ranks'){ lbCache = {board:lbBoard, label:'Kills', fmt:'int', rows:[], me:null, boards:null}; renderPanel('ranks'); }
+  });
 }
 
 function upgradeButton(k){
@@ -2141,6 +2209,8 @@ panelBody.addEventListener('click', e=>{
     case 'noown': toast('Locked — buy it in the Shop.','bad'); break;
     case 'claimtask': claimTask(k); break;
     case 'reroll': rerollTask(k); break;
+    case 'board': loadBoard(k); break;
+    case 'signout': signOutFromGame(); break;
     case 'rbounty': placeRealBounty(k, +el.dataset.v); break;
     case 'pickfuse':
       if(fuseA===k) fuseA=null;
@@ -2159,59 +2229,205 @@ panelBody.addEventListener('click', e=>{
 });
 
 /* ============================================================
-   BOOT
+   BOOT — accounts, then play
    ============================================================ */
-async function startGame(){
-  const typed = (document.getElementById('playerName').value.trim() || S.name || 'Hero');
-  S.name = typed.slice(0,16);
+let authMode = 'signin';
+
+function authMsg(text, kind){
+  const el = $('authMsg');
+  el.className = 'authmsg' + (kind ? ' '+kind : '');
+  el.textContent = text || '';
+}
+function showAuth(mode){
+  authMode = mode;
+  document.querySelectorAll('#authTabs .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === mode));
+  $('signinForm').classList.toggle('hidden', mode !== 'signin');
+  $('signupForm').classList.toggle('hidden', mode !== 'signup');
+  $('guestBox').classList.toggle('hidden', mode !== 'guest');
+  authMsg('');
+}
+document.querySelectorAll('#authTabs .tab').forEach(b => {
+  b.onclick = () => { $('resumeBox').classList.add('hidden'); $('claimBox').classList.add('hidden'); showAuth(b.dataset.tab); };
+});
+
+/* adopt a save that came down from the server */
+function adoptCloudState(cloud){
+  if(!cloud) return;
+  const f = freshState();
+  S = Object.assign(f, cloud);
+  S.look    = Object.assign(f.look,    cloud.look    || {});
+  S.owned   = Object.assign(f.owned,   cloud.owned   || {});
+  S.counters= Object.assign(f.counters,cloud.counters|| {});
+  S.stats   = Object.assign(f.stats,   cloud.stats   || {});
+}
+
+/* shared entry point once identity is settled */
+function enterWorld(displayName, opts){
+  S.name = String(displayName || S.name || 'Hero').slice(0, 16);
   ensureTasks();
   P = makePlayer(); refreshPlayerStats(false);
-  cam.x=P.x; cam.y=P.y;
-  document.getElementById('start').classList.add('hidden');
-  running=true; last=performance.now();
-  hudSync(); save(); netBadge();
+  P.x = CENTER.x; P.y = CENTER.y + 120; cam.x = P.x; cam.y = P.y;
+  $('start').classList.add('hidden');
+  authMsg('');
+  running = true; last = performance.now();
+  hudSync(); netBadge(); save();
   if(!S.hero) toast('Walk to a temple and press E to claim your first hero — it is free.','info');
   else toast('Welcome back, '+S.name+'.','info');
-
-  // cloud session (the game is already playable; this just upgrades it)
-  const netName = S.name.replace(/[^A-Za-z0-9_\-]/g,'_').slice(0,16).padEnd(3,'x');
-  const d = await NET.session(netName);
-  netBadge();
-  if(!d){
-    if(NET.status==='taken') toast('"'+netName+'" belongs to another player — playing locally. Pick a new name to go online.','bad');
-    return;
+  if(opts && opts.online){
+    NET.connectLive();
+    toast('Signed in — leaderboards, bounties and live players are on.','good');
+  } else if(opts && opts.offlineNotice){
+    toast('Playing offline — this browser only.','info');
   }
-  if(d.state && Number(d.state.playtime||0) > Number(S.playtime||0) + 5){
-    const f = freshState();
-    S = Object.assign(f, d.state);
-    S.look = Object.assign(f.look, d.state.look||{});
-    S.owned = Object.assign(f.owned, d.state.owned||{});
-    S.counters = Object.assign(f.counters, d.state.counters||{});
-    S.stats = Object.assign(f.stats, d.state.stats||{});
-    S.name = typed.slice(0,16);
-    ensureTasks();
-    P = makePlayer(); refreshPlayerStats(false);
-    P.x=CENTER.x; P.y=CENTER.y+120; cam.x=P.x; cam.y=P.y;
-    toast('Cloud save restored.','good');
-  }
-  S.heat = Number(d.player.bounty)||0; S.heatPending = 0;
-  NET.connectLive();
-  toast('Connected — the bounty board is shared with every other player.','good');
-  hudSync(); save();
 }
-document.getElementById('btnPlay').onclick=startGame;
-document.getElementById('playerName').addEventListener('keydown',e=>{ if(e.key==='Enter') startGame(); });
-document.getElementById('btnRespawn').onclick=respawn;
-document.getElementById('btnWipe').onclick=()=>{
-  localStorage.removeItem(SAVE_KEY); S=freshState(); ensureTasks();
-  document.getElementById('playerName').value='';
-  alert('Save wiped.');
+
+let authBusy = false;
+function setAuthBusy(on, label){
+  authBusy = on;
+  document.querySelectorAll('#start .primary').forEach(b => {
+    b.disabled = on;
+    if(on && label && b.closest('form') === document.activeForm) b.dataset.was = b.textContent;
+  });
+  document.querySelectorAll('#start button.primary').forEach(b => {
+    if(on){ if(!b.dataset.was) b.dataset.was = b.textContent; b.textContent = label || 'WORKING…'; }
+    else if(b.dataset.was){ b.textContent = b.dataset.was; delete b.dataset.was; }
+  });
+}
+
+async function doSignIn(name, password){
+  if(authBusy) return;
+  setAuthBusy(true, 'SIGNING IN…');
+  authMsg('Signing in…','info');
+  try {
+    const d = await NET.login(name, password);
+    if(d.state && Number(d.state.playtime||0) > Number(S.playtime||0)) adoptCloudState(d.state);
+    S.heat = Number(d.player.bounty)||0; S.heatPending = 0; S.heatWipe = false;
+    enterWorld(d.name, { online:true });
+  } catch(e){
+    authMsg(e.message || 'Could not sign in.', '');
+  } finally { setAuthBusy(false); }
+}
+async function doSignUp(name, password){
+  if(authBusy) return;
+  setAuthBusy(true, 'CREATING…');
+  authMsg('Creating your account…','info');
+  try {
+    const d = await NET.signup(name, password);
+    S.heat = 0; S.heatPending = 0; S.heatWipe = false;
+    enterWorld(d.name, { online:true });
+  } catch(e){
+    authMsg(e.message || 'Could not create that account.', '');
+  } finally { setAuthBusy(false); }
+}
+
+$('signinForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const n = $('siName').value.trim(), p = $('siPass').value;
+  if(!n || !p) return authMsg('Enter your name and password.');
+  doSignIn(n, p);
+});
+$('signupForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const n = $('suName').value.trim(), p = $('suPass').value, p2 = $('suPass2').value;
+  if(!/^[A-Za-z0-9_\-]{3,16}$/.test(n))
+    return authMsg('Name must be 3-16 characters: letters, numbers, _ or -.');
+  if(p.length < 6) return authMsg('Password must be at least 6 characters.');
+  if(p !== p2)     return authMsg('Those passwords do not match.');
+  doSignUp(n, p);
+});
+$('btnGuest').onclick = () => {
+  const n = $('gsName').value.trim() || S.name || 'Hero';
+  enterWorld(n, { offlineNotice:true });
 };
+$('claimForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const pw = $('clPass').value;
+  if(pw.length < 6) return authMsg('Password must be at least 6 characters.');
+  if(authBusy) return;
+  const legacy = (()=>{ try { return localStorage.getItem('toh_token'); } catch(_){ return null; } })();
+  setAuthBusy(true, 'SAVING…');
+  authMsg('Securing your save…','info');
+  try {
+    const d = await NET.req('POST','/api/claim-account',{ name:S.name, token:legacy, password:pw });
+    NET.remember(S.name, d.token);
+    try { localStorage.removeItem('toh_token'); } catch(_){}
+    const r = await NET.resume();
+    if(r){
+      if(r.state && Number(r.state.playtime||0) > Number(S.playtime||0)) adoptCloudState(r.state);
+      S.heat = Number(r.player.bounty)||0; S.heatPending = 0; S.heatWipe = false;
+      enterWorld(r.name, { online:true });
+    } else {
+      authMsg('Password set — please sign in.','ok'); showAuth('signin');
+    }
+  } catch(err){
+    authMsg(err.message || 'Could not secure that save.');
+  } finally { setAuthBusy(false); }
+});
+$('btnClaimSkip').onclick = () => {
+  $('claimBox').classList.add('hidden');
+  showAuth('guest');
+  $('gsName').value = S.name || '';
+};
+
+$('btnResume').onclick = async () => {
+  if(authBusy) return;
+  setAuthBusy(true, 'RESUMING…');
+  authMsg('Resuming…','info');
+  const d = await NET.resume();
+  setAuthBusy(false);
+  if(!d){ authMsg('That session expired — please sign in again.'); showAuth('signin'); return; }
+  if(d.state && Number(d.state.playtime||0) > Number(S.playtime||0)) adoptCloudState(d.state);
+  S.heat = Number(d.player.bounty)||0; S.heatPending = 0; S.heatWipe = false;
+  enterWorld(d.name, { online:true });
+};
+$('btnSignOut').onclick = async () => {
+  await NET.logout();
+  localStorage.removeItem(SAVE_KEY);
+  S = freshState(); ensureTasks(); P = makePlayer();
+  $('resumeBox').classList.add('hidden');
+  showAuth('signin');
+  authMsg('Signed out.','ok');
+};
+$('btnRespawn').onclick = respawn;
+$('btnWipe') && ($('btnWipe').onclick = () => {
+  localStorage.removeItem(SAVE_KEY); S = freshState(); ensureTasks();
+  alert('Local save wiped.');
+});
+
+/* sign out from inside the game (Avatar panel) */
+async function signOutFromGame(){
+  await NET.logout();
+  save();
+  location.reload();
+}
+
 (function boot(){
   const had = load();
   ensureTasks();
-  if(had) document.getElementById('playerName').value = S.name;
   P = makePlayer();
   hudSync();
+  const saved = NET.saved();
+  let legacy = null;
+  try { legacy = localStorage.getItem('toh_token'); } catch(e){}
+
+  if(!saved.token && legacy && had && S.name){
+    // a save from before accounts existed — offer to keep it
+    $('claimName').textContent = S.name;
+    $('claimBox').classList.remove('hidden');
+    $('signinForm').classList.add('hidden');
+    $('signupForm').classList.add('hidden');
+    $('guestBox').classList.add('hidden');
+    document.querySelectorAll('#authTabs .tab').forEach(b => b.classList.remove('on'));
+  } else if(saved.name && saved.token){
+    $('resumeName').textContent = saved.name;
+    $('resumeBox').classList.remove('hidden');
+    $('signinForm').classList.add('hidden');
+    $('signupForm').classList.add('hidden');
+    $('guestBox').classList.add('hidden');
+    document.querySelectorAll('#authTabs .tab').forEach(b => b.classList.remove('on'));
+  } else {
+    if(had && S.name) $('siName').value = S.name;
+    showAuth('signin');
+  }
 })();
 addEventListener('beforeunload', save);

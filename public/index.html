@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TEMPLE OF HEROES</title>
-<link rel="stylesheet" href="style.css?v=5">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 
@@ -38,6 +38,7 @@
         <button data-panel="fusion"  title="Fusion (F)">FUSION</button>
         <button data-panel="tasks"   title="Tasks (J)">TASKS</button>
         <button data-panel="bounty"  title="Bounty Board (B)">BOUNTY</button>
+        <button data-panel="ranks"   title="Leaderboards (L)">RANKS</button>
         <button data-panel="shop"    title="Shop (P)">SHOP</button>
         <button data-panel="settings"title="Settings (C)">AVATAR</button>
       </div>
@@ -70,13 +71,56 @@
       <h1>TEMPLE<span>OF</span>HEROES</h1>
       <p class="tag">Claim a temple. Forge a legend. Fuse the impossible.</p>
       <div class="start-panel">
-        <label>Hero Name</label>
-        <input id="playerName" maxlength="16" placeholder="BlockSlayer99">
-        <div class="start-row">
-          <button id="btnPlay" class="primary">ENTER THE PLAZA</button>
-          <button id="btnWipe">Wipe Save</button>
+        <div id="authTabs" class="tabs">
+          <button class="tab on"  data-tab="signin">SIGN IN</button>
+          <button class="tab"     data-tab="signup">CREATE ACCOUNT</button>
+          <button class="tab"     data-tab="guest">PLAY OFFLINE</button>
         </div>
-        <p class="tiny">Progress saves automatically to this browser.</p>
+
+        <div id="claimBox" class="hidden">
+          <p class="who">You already have a save as <b id="claimName">—</b></p>
+          <p class="tiny" style="margin:-6px 0 12px">Set a password to keep it and be able to sign in from anywhere. Your heroes, credits and progress carry over.</p>
+          <form id="claimForm" autocomplete="on" class="authform">
+            <label for="clPass">Choose a Password</label>
+            <input id="clPass" name="password" type="password" autocomplete="new-password" placeholder="at least 6 characters">
+            <button type="submit" class="primary">KEEP MY SAVE</button>
+          </form>
+          <button id="btnClaimSkip" class="ghost">Keep playing without an account</button>
+        </div>
+
+        <div id="resumeBox" class="hidden">
+          <p class="who">Signed in as <b id="resumeName">—</b></p>
+          <button id="btnResume" class="primary">CONTINUE</button>
+          <button id="btnSignOut" class="ghost">Sign out</button>
+        </div>
+
+        <form id="signinForm" class="authform" autocomplete="on">
+          <label for="siName">Hero Name</label>
+          <input id="siName" name="username" maxlength="16" autocomplete="username" placeholder="BlockSlayer99">
+          <label for="siPass">Password</label>
+          <input id="siPass" name="password" type="password" autocomplete="current-password" placeholder="••••••••">
+          <button type="submit" class="primary">SIGN IN</button>
+        </form>
+
+        <form id="signupForm" class="authform hidden" autocomplete="on">
+          <label for="suName">Choose a Hero Name</label>
+          <input id="suName" name="username" maxlength="16" autocomplete="username" placeholder="3-16 letters, numbers, _ or -">
+          <label for="suPass">Choose a Password</label>
+          <input id="suPass" name="password" type="password" autocomplete="new-password" placeholder="at least 6 characters">
+          <label for="suPass2">Repeat Password</label>
+          <input id="suPass2" name="password2" type="password" autocomplete="new-password" placeholder="again">
+          <button type="submit" class="primary">CREATE ACCOUNT &amp; PLAY</button>
+        </form>
+
+        <div id="guestBox" class="authform hidden">
+          <label for="gsName">Hero Name</label>
+          <input id="gsName" maxlength="16" placeholder="BlockSlayer99">
+          <p class="tiny" style="margin:0 0 12px">Offline play saves to this browser only — no leaderboard, no bounties, no other players.</p>
+          <button id="btnGuest" class="primary">PLAY OFFLINE</button>
+        </div>
+
+        <p id="authMsg" class="authmsg"></p>
+        <p class="tiny">An account lets you pick up your heroes on any device and puts you on the leaderboards.</p>
       </div>
       <div class="start-legend">
         <div><b>WASD</b> move</div><div><b>Click</b> attack</div><div><b>Space</b> ultimate</div>
@@ -94,9 +138,9 @@
   </div>
 </div>
 
-<script src="gfx.js?v=5"></script>
-<script src="data.js?v=5"></script>
-<script src="net.js?v=5"></script>
-<script src="game.js?v=5"></script>
+<script src="gfx.js?v=7"></script>
+<script src="data.js?v=7"></script>
+<script src="net.js?v=7"></script>
+<script src="game.js?v=7"></script>
 </body>
 </html>

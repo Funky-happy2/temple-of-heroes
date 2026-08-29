@@ -16,6 +16,27 @@ Without `DATABASE_URL` the server still runs and the game is fully playable — 
 local browser saves with a simulated bounty board. You can also open `public/index.html` straight
 off disk for a no-server, offline game.
 
+## Accounts
+
+The start screen offers **Sign In**, **Create Account** and **Play Offline**.
+
+- An account is a name plus a password. Passwords are hashed with **scrypt** and a per-user
+  salt; the plaintext is never stored and never leaves the request.
+- Signing in issues a **session token** per device, so a phone and a laptop can both stay
+  signed in, and signing out on one does not sign you out on the other (10 devices max).
+- Wrong password and unknown name return the *same* message, so the endpoint can't be used
+  to discover who has an account.
+- Saves made before accounts existed are detected on load and offered a **"keep my save"**
+  prompt: set a password once and all your heroes, credits and progress carry over.
+- **Play Offline** keeps everything in this browser — no leaderboard, no bounties, no other
+  players.
+
+## Leaderboards
+
+Press **L**, or the RANKS button. Eight boards, each showing the top 25 plus your own rank
+even when you are further down: kills, credits, highest suit tier, best killstreak, bounties
+claimed, biggest bounty currently carried, fusions forged, and hours played.
+
 ## Online play
 
 With a database attached the game becomes genuinely multiplayer:

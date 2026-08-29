@@ -14,6 +14,57 @@ const NET = {
   backoffUntil: 0,
   status: 'offline',
 
+  /* the session token from the last successful sign-in on this browser */
+  saved(){
+    try {
+      return { name: localStorage.getItem('toh_name'), token: localStorage.getItem('toh_session') };
+    } catch(e){ return { name:null, token:null }; }
+  },
+  remember(name, token){
+    this.name = name; this.token = token;
+    try { localStorage.setItem('toh_name', name); localStorage.setItem('toh_session', token); } catch(e){}
+  },
+  forget(){
+    try { localStorage.removeItem('toh_name'); localStorage.removeItem('toh_session'); } catch(e){}
+    this.name = null; this.token = null; this.online = false; this.status = 'offline';
+  },
+
+  async signup(name, password){
+    const d = await this.req('POST','/api/signup',{ name, password });
+    this.remember(d.name, d.token);
+    this.online = true; this.status = 'online'; this.applyWorld(d.world);
+    return d;
+  },
+  async login(name, password){
+    const d = await this.req('POST','/api/login',{ name, password });
+    this.remember(d.name, d.token);
+    this.online = true; this.status = 'online'; this.applyWorld(d.world);
+    return d;
+  },
+  async resume(){
+    const { name, token } = this.saved();
+    if(!name || !token) return null;
+    try {
+      const d = await this.req('POST','/api/resume',{ name, token });
+      this.name = name; this.token = token;
+      this.online = true; this.status = 'online'; this.applyWorld(d.world);
+      return d;
+    } catch(e){
+      if(e.status === 401) this.forget();
+      return null;
+    }
+  },
+  async logout(){
+    const { token } = this.saved();
+    this.disconnectLive();
+    try { await this.req('POST','/api/logout',{ token }); } catch(e){}
+    this.forget();
+  },
+  async leaderboard(board){
+    return this.req('GET','/api/leaderboard?board='+encodeURIComponent(board||'kills')
+                    + (this.name ? '&me='+encodeURIComponent(this.name) : ''));
+  },
+
   /* a per-browser secret that proves this save is yours */
   getToken() {
     let t = null;

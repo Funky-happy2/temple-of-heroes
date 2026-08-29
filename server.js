@@ -42,6 +42,31 @@ const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.floor(Number(v) |
 
 function badName(name) { return typeof name !== 'string' || !NAME_RE.test(name); }
 
+/* ---------- passwords (scrypt, no native dependency) ---------- */
+function hashPassword(pw, salt){
+  const s = salt || crypto.randomBytes(16).toString('hex');
+  const h = crypto.scryptSync(String(pw), s, 64).toString('hex');
+  return { hash: h, salt: s };
+}
+function passwordMatches(pw, hash, salt){
+  if(!hash || !salt) return false;
+  const candidate = crypto.scryptSync(String(pw), salt, 64);
+  const stored = Buffer.from(hash, 'hex');
+  if(candidate.length !== stored.length) return false;
+  return crypto.timingSafeEqual(candidate, stored);
+}
+const newToken = () => crypto.randomBytes(32).toString('hex');
+
+async function createSession(playerId){
+  const token = newToken();
+  await q('insert into sessions (token_hash, player_id) values ($1,$2)', [sha(token), playerId]);
+  // keep at most 10 devices per account
+  await q(`delete from sessions where token_hash in (
+             select token_hash from sessions where player_id = $1
+             order by last_used desc offset 10)`, [playerId]);
+  return token;
+}
+
 /* very small in-memory rate limiter: N requests per window per IP */
 const hits = new Map();
 function rateLimit(max, windowMs) {
@@ -64,13 +89,20 @@ function requireDb(req, res, next) {
   next();
 }
 
-/* authenticate by name + token, returns the player row */
+/* authenticate by session token (falls back to the legacy per-browser token) */
 async function auth(name, token) {
   if (badName(name) || typeof token !== 'string' || token.length < 16) return null;
-  const { rows } = await q('select * from players where name_lower = $1', [name.toLowerCase()]);
-  const p = rows[0];
-  if (!p || p.token_hash !== sha(token)) return null;
-  return p;
+  const { rows } = await q(
+    `select p.* from sessions s join players p on p.id = s.player_id
+      where s.token_hash = $1 and p.name_lower = $2`, [sha(token), name.toLowerCase()]);
+  if (rows[0]) {
+    q('update sessions set last_used = now() where token_hash = $1', [sha(token)]).catch(()=>{});
+    return rows[0];
+  }
+  // legacy guest saves created before accounts existed
+  const g = await q('select * from players where name_lower = $1 and token_hash = $2',
+                    [name.toLowerCase(), sha(token)]);
+  return g.rows[0] || null;
 }
 
 async function addFeed(kind, actor, target, amount, detail) {
@@ -114,6 +146,99 @@ app.get('/api/health', async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, db: false, error: e.message });
   }
+});
+
+/* ---------- accounts ---------- */
+const PW_MIN = 6;
+
+app.post('/api/signup', requireDb, rateLimit(12, 60000), async (req, res) => {
+  try {
+    const { name, password } = req.body || {};
+    if (badName(name))
+      return res.status(400).json({ error: 'Name must be 3-16 characters: letters, numbers, _ or -.' });
+    if (typeof password !== 'string' || password.length < PW_MIN)
+      return res.status(400).json({ error: 'Password must be at least ' + PW_MIN + ' characters.' });
+
+    const exists = await q('select id from players where name_lower = $1', [name.toLowerCase()]);
+    if (exists.rows[0]) return res.status(409).json({ error: 'That name is already taken.' });
+
+    const { hash, salt } = hashPassword(password);
+    const ins = await q(
+      `insert into players (name, name_lower, token_hash, password_hash, password_salt)
+       values ($1,$2,$3,$4,$5) returning *`,
+      [name, name.toLowerCase(), sha(newToken()), hash, salt]);
+    const p = ins.rows[0];
+    const token = await createSession(p.id);
+    await addFeed('joined', p.name, null, 0, 'created an account');
+    res.json({ ok: true, name: p.name, token,
+               player: { name: p.name, cash: Number(p.cash), cores: p.cores, bounty: 0 },
+               state: null, world: await worldSnapshot(p.name) });
+  } catch (e) {
+    console.error('[signup]', e.message);
+    res.status(500).json({ error: 'Could not create that account.' });
+  }
+});
+
+app.post('/api/login', requireDb, rateLimit(20, 60000), async (req, res) => {
+  try {
+    const { name, password } = req.body || {};
+    if (badName(name) || typeof password !== 'string')
+      return res.status(400).json({ error: 'Enter a name and password.' });
+    const { rows } = await q('select * from players where name_lower = $1', [name.toLowerCase()]);
+    const p = rows[0];
+    // same message either way, so this cannot be used to enumerate names
+    if (!p || !p.password_hash || !passwordMatches(password, p.password_hash, p.password_salt))
+      return res.status(401).json({ error: 'Wrong name or password.' });
+
+    const token = await createSession(p.id);
+    await q('update players set last_seen = now() where id = $1', [p.id]);
+    res.json({ ok: true, name: p.name, token,
+               player: { name: p.name, cash: Number(p.cash), cores: p.cores, bounty: Number(p.bounty) },
+               state: p.state && Object.keys(p.state).length ? p.state : null,
+               world: await worldSnapshot(p.name) });
+  } catch (e) {
+    console.error('[login]', e.message);
+    res.status(500).json({ error: 'Sign in failed.' });
+  }
+});
+
+/* resume an existing session token (no password needed) */
+app.post('/api/resume', requireDb, rateLimit(60, 60000), async (req, res) => {
+  try {
+    const { name, token } = req.body || {};
+    const p = await auth(name, token);
+    if (!p) return res.status(401).json({ error: 'Session expired.' });
+    await q('update players set last_seen = now() where id = $1', [p.id]);
+    res.json({ ok: true, name: p.name,
+               player: { name: p.name, cash: Number(p.cash), cores: p.cores, bounty: Number(p.bounty) },
+               state: p.state && Object.keys(p.state).length ? p.state : null,
+               world: await worldSnapshot(p.name) });
+  } catch (e) { res.status(500).json({ error: 'Resume failed.' }); }
+});
+
+app.post('/api/logout', requireDb, rateLimit(30, 60000), async (req, res) => {
+  try {
+    const { token } = req.body || {};
+    if (typeof token === 'string' && token.length >= 16)
+      await q('delete from sessions where token_hash = $1', [sha(token)]);
+    res.json({ ok: true });
+  } catch (e) { res.json({ ok: true }); }
+});
+
+/* set a password on a legacy guest save, turning it into a real account */
+app.post('/api/claim-account', requireDb, rateLimit(10, 60000), async (req, res) => {
+  try {
+    const { name, token, password } = req.body || {};
+    const p = await auth(name, token);
+    if (!p) return res.status(401).json({ error: 'Not your save.' });
+    if (p.password_hash) return res.status(400).json({ error: 'This account already has a password.' });
+    if (typeof password !== 'string' || password.length < PW_MIN)
+      return res.status(400).json({ error: 'Password must be at least ' + PW_MIN + ' characters.' });
+    const { hash, salt } = hashPassword(password);
+    await q('update players set password_hash = $2, password_salt = $3 where id = $1', [p.id, hash, salt]);
+    const fresh = await createSession(p.id);
+    res.json({ ok: true, token: fresh });
+  } catch (e) { res.status(500).json({ error: 'Could not set a password.' }); }
 });
 
 /* create or resume a save */
@@ -163,17 +288,23 @@ app.post('/api/sync', requireDb, rateLimit(120, 60000), async (req, res) => {
     const delta = clampInt(heatDelta, 0, 5e8);
     if (heatWipe === true) await q('update players set bounty = 0 where id = $1', [p.id]);
     else if (delta > 0)    await q('update players set bounty = greatest(0, bounty + $2) where id = $1', [p.id, delta]);
+    const fusions  = Array.isArray(st.fused) ? st.fused.length : 0;
+    const heroes   = st.heroes && typeof st.heroes === 'object' ? Object.values(st.heroes) : [];
+    const bestTier = heroes.reduce((m, h) => Math.max(m, (h && h.tier | 0) + 1), 0);
     await q(
       `update players set
          hero = $2, hero_name = $3, hero_tier = $4,
          cash = $5, cores = $6, kills = $7, deaths = $8, best_streak = $9,
-         look = $10, state = $11, updated_at = now(), last_seen = now()
+         look = $10, state = $11, fusions = $12, playtime = $13,
+         top_tier = greatest(top_tier, $14),
+         updated_at = now(), last_seen = now()
        where id = $1`,
       [p.id,
        String(st.hero || ''), String(st.heroName || ''), clampInt(st.heroTier, 0, 7),
        clampInt(st.cash, 0, 9e14), clampInt(st.cores, 0, 1e6),
        clampInt(st.kills, 0, 1e9), clampInt(st.deaths, 0, 1e9), clampInt(st.bestStreak, 0, 1e7),
-       st.look || {}, st]);
+       st.look || {}, st, clampInt(fusions, 0, 9999), clampInt(st.playtime, 0, 1e9),
+       clampInt(bestTier, 0, 8)]);
 
     // the player's own bounty (heat) is server-owned; report it back
     const { rows } = await q('select bounty, cash from players where id = $1', [p.id]);
@@ -181,6 +312,52 @@ app.post('/api/sync', requireDb, rateLimit(120, 60000), async (req, res) => {
   } catch (e) {
     console.error('[sync]', e.message);
     res.status(500).json({ error: 'Sync failed.' });
+  }
+});
+
+/* ---------- leaderboards ---------- */
+const BOARDS = {
+  kills:   { col: 'kills',         label: 'Kills',            fmt: 'int'  },
+  cash:    { col: 'cash',          label: 'Credits',          fmt: 'cash' },
+  tier:    { col: 'top_tier',      label: 'Highest Tier',     fmt: 'tier' },
+  streak:  { col: 'best_streak',   label: 'Best Killstreak',  fmt: 'int'  },
+  bounty:  { col: 'bounty_earned', label: 'Bounties Claimed', fmt: 'cash' },
+  wanted:  { col: 'bounty',        label: 'Biggest Bounty',   fmt: 'cash' },
+  fusions: { col: 'fusions',       label: 'Fusions Forged',   fmt: 'int'  },
+  time:    { col: 'playtime',      label: 'Hours Played',     fmt: 'hours'}
+};
+
+app.get('/api/leaderboard', requireDb, rateLimit(90, 60000), async (req, res) => {
+  try {
+    const key = BOARDS[req.query.board] ? req.query.board : 'kills';
+    const col = BOARDS[key].col;
+    const me  = String(req.query.me || '').toLowerCase();
+
+    const top = await q(
+      `select name, hero_name, hero_tier, kills, deaths, best_streak, cash, bounty,
+              bounty_earned, fusions, top_tier, playtime,
+              rank() over (order by ${col} desc, kills desc) as rank
+         from players
+        where ${col} > 0
+        order by ${col} desc, kills desc
+        limit 25`);
+
+    let mine = null;
+    if (me) {
+      const r = await q(
+        `select * from (
+           select name, name_lower, hero_name, hero_tier, kills, deaths, best_streak, cash,
+                  bounty, bounty_earned, fusions, top_tier, playtime,
+                  rank() over (order by ${col} desc, kills desc) as rank
+             from players) t
+         where t.name_lower = $1`, [me]);
+      mine = r.rows[0] || null;
+    }
+    res.json({ board: key, label: BOARDS[key].label, fmt: BOARDS[key].fmt,
+               rows: top.rows, me: mine, boards: Object.keys(BOARDS).map(k => ({ k, label: BOARDS[k].label })) });
+  } catch (e) {
+    console.error('[leaderboard]', e.message);
+    res.status(500).json({ error: 'Leaderboard unavailable.' });
   }
 });
 
@@ -247,7 +424,8 @@ app.post('/api/bounty/claim', requireDb, rateLimit(60, 60000), async (req, res) 
     // the prize pays out, the target is cleared, and the hunter inherits some heat
     const heat = Math.round(prize * 0.35);
     await client.query('update players set bounty = 0, deaths = deaths + 1 where id = $1', [tg.id]);
-    await client.query('update players set cash = cash + $2, bounty = bounty + $3, kills = kills + 1 where id = $1',
+    await client.query(`update players set cash = cash + $2, bounty = bounty + $3,
+                          kills = kills + 1, bounty_earned = bounty_earned + $2 where id = $1`,
                        [p.id, prize, heat]);
     await client.query(`update bounty_ledger set active = false, claimed_by = $1, claimed_at = now()
                          where target = $2 and active`, [p.name, tg.name]);
