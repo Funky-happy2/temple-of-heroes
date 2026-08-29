@@ -1578,6 +1578,15 @@ function checkTasks(){
   }
   if(panelOpen==='tasks') renderPanel('tasks');
 }
+function rerollTask(tid){
+  const i=S.tasks.findIndex(x=>x.tid===tid); if(i<0) return;
+  const old=S.tasks[i];
+  let t2, guard=0;
+  do { t2 = makeTask(); } while(t2.id===old.id && ++guard<8);
+  S.tasks[i]=t2;
+  toast('Task swapped for: '+t2.n,'info');
+  save(); renderPanel('tasks');
+}
 function claimTask(tid){
   const i=S.tasks.findIndex(x=>x.tid===tid); if(i<0) return;
   const tk=S.tasks[i];
@@ -1950,7 +1959,7 @@ function renderPanel(which, arg){
   case 'tasks': {
     panelTitle.textContent='TASK BOARD';
     ensureTasks();
-    html += '<div class="note">Tasks pay <b class="price">credits</b> and <b class="price cores">◈ Upgrade Cores</b> — cores are the only way to advance a suit tier. Finished tasks are replaced immediately.</div>';
+    html += '<div class="note">Tasks pay <b class="price">credits</b> and <b class="price cores">◈ Upgrade Cores</b> — cores are the only way to advance a suit tier. Finished tasks are replaced immediately, and any task you cannot finish right now can be swapped for another.</div>';
     for(const tk of S.tasks){
       const pr=taskProgress(tk), done=pr>=tk.need;
       html += '<div class="taskrow '+(done?'ready':'')+'">'+
@@ -1958,7 +1967,9 @@ function renderPanel(which, arg){
         '<div class="pbar"><i style="width:'+clamp(pr/tk.need*100,0,100)+'%"></i></div>'+
         '<div class="td">'+Math.min(pr,tk.need)+' / '+tk.need+'</div></div>'+
         '<div class="rw"><div class="price">$'+fmt(tk.cash)+'</div><div class="price cores">'+tk.cores+' ◈</div>'+
-        '<button class="act" data-a="claimtask" data-k="'+tk.tid+'" '+(done?'':'disabled')+'>'+(done?'CLAIM':'IN PROGRESS')+'</button></div>'+
+        '<button class="act" data-a="claimtask" data-k="'+tk.tid+'" '+(done?'':'disabled')+'>'+(done?'CLAIM':'IN PROGRESS')+'</button>'+
+        (done?'':'<button class="act" style="margin-top:4px;padding:5px;font-size:10px" data-a="reroll" data-k="'+tk.tid+'">SWAP TASK</button>')+
+        '</div>'+
       '</div>';
     }
     html += '<div class="section-title">LIFETIME</div>'+
@@ -2129,6 +2140,7 @@ panelBody.addEventListener('click', e=>{
     case 'look': equipLook(el.dataset.f,k); break;
     case 'noown': toast('Locked — buy it in the Shop.','bad'); break;
     case 'claimtask': claimTask(k); break;
+    case 'reroll': rerollTask(k); break;
     case 'rbounty': placeRealBounty(k, +el.dataset.v); break;
     case 'pickfuse':
       if(fuseA===k) fuseA=null;
