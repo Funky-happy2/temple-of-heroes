@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: temple-of-heroes
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # Set this in the Render dashboard (or when the Blueprint prompts you).
+      # `sync: false` keeps the value OUT of this repo.
+      - key: DATABASE_URL
+        sync: false
+      - key: NODE_VERSION
+        value: "22"

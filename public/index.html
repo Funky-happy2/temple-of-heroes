@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TEMPLE OF HEROES</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="game">
+  <canvas id="cv"></canvas>
+
+  <!-- ============ HUD ============ -->
+  <div id="hud">
+    <div class="hud-left">
+      <div class="hero-card">
+        <div class="hero-portrait" id="hudPortrait"></div>
+        <div class="hero-meta">
+          <div class="hero-name" id="hudHeroName">No Hero</div>
+          <div class="hero-tier" id="hudTierName">Visit a temple</div>
+          <div class="bar hp"><div class="fill" id="hpFill"></div><span id="hpText">100/100</span></div>
+          <div class="bar ult"><div class="fill" id="ultFill"></div><span id="ultText">ULT</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hud-right">
+      <div class="wallet">
+        <div class="cash" title="Credits">$ <b id="hudCash">0</b></div>
+        <div class="cores" title="Upgrade Cores">◈ <b id="hudCores">0</b></div>
+        <div class="heat" title="Your bounty — hunters will come for you">☠ <b id="hudHeat">0</b></div>
+        <div class="net" id="hudNet" title="Server connection">● <b>local</b></div>
+      </div>
+      <div class="menu-btns">
+        <button data-panel="temples" title="Temples (T)">TEMPLES</button>
+        <button data-panel="upgrade" title="Upgrade (U)">UPGRADE</button>
+        <button data-panel="fusion"  title="Fusion (F)">FUSION</button>
+        <button data-panel="tasks"   title="Tasks (J)">TASKS</button>
+        <button data-panel="bounty"  title="Bounty Board (B)">BOUNTY</button>
+        <button data-panel="shop"    title="Shop (P)">SHOP</button>
+        <button data-panel="settings"title="Settings (C)">AVATAR</button>
+      </div>
+    </div>
+
+    <div class="hud-bottom">
+      <div id="zoneName">Temple Plaza</div>
+      <div id="hint">WASD move &middot; Mouse aim &middot; Click attack &middot; SPACE ultimate &middot; E interact</div>
+    </div>
+
+    <canvas id="minimap" width="180" height="140"></canvas>
+    <div id="toasts"></div>
+    <div id="killfeed"></div>
+  </div>
+
+  <!-- ============ PANELS ============ -->
+  <div id="overlay" class="hidden">
+    <div id="panel">
+      <div id="panelHead">
+        <h2 id="panelTitle">Panel</h2>
+        <button id="panelClose">✕</button>
+      </div>
+      <div id="panelBody"></div>
+    </div>
+  </div>
+
+  <!-- ============ START SCREEN ============ -->
+  <div id="start">
+    <div class="start-inner">
+      <h1>TEMPLE<span>OF</span>HEROES</h1>
+      <p class="tag">Claim a temple. Forge a legend. Fuse the impossible.</p>
+      <div class="start-panel">
+        <label>Hero Name</label>
+        <input id="playerName" maxlength="16" placeholder="BlockSlayer99">
+        <div class="start-row">
+          <button id="btnPlay" class="primary">ENTER THE PLAZA</button>
+          <button id="btnWipe">Wipe Save</button>
+        </div>
+        <p class="tiny">Progress saves automatically to this browser.</p>
+      </div>
+      <div class="start-legend">
+        <div><b>WASD</b> move</div><div><b>Click</b> attack</div><div><b>Space</b> ultimate</div>
+        <div><b>E</b> interact</div><div><b>Shift</b> sprint</div><div><b>Esc</b> close</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="death" class="hidden">
+    <div class="death-inner">
+      <h2>KNOCKED OUT</h2>
+      <p id="deathMsg">You dropped some credits.</p>
+      <button id="btnRespawn" class="primary">RESPAWN AT PLAZA</button>
+    </div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script src="net.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
