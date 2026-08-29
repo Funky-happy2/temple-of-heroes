@@ -2250,6 +2250,11 @@ document.querySelectorAll('#authTabs .tab').forEach(b => {
   b.onclick = () => { $('resumeBox').classList.add('hidden'); $('claimBox').classList.add('hidden'); showAuth(b.dataset.tab); };
 });
 
+/* the name the server knows this save by (the old client sanitised it this way) */
+function serverNameFor(n){
+  return String(n||'').replace(/[^A-Za-z0-9_\-]/g,'_').slice(0,16).padEnd(3,'x');
+}
+
 /* adopt a save that came down from the server */
 function adoptCloudState(cloud){
   if(!cloud) return;
@@ -2347,9 +2352,10 @@ $('claimForm').addEventListener('submit', async e => {
   const legacy = (()=>{ try { return localStorage.getItem('toh_token'); } catch(_){ return null; } })();
   setAuthBusy(true, 'SAVING…');
   authMsg('Securing your save…','info');
+  const srvName = serverNameFor(S.name);
   try {
-    const d = await NET.req('POST','/api/claim-account',{ name:S.name, token:legacy, password:pw });
-    NET.remember(S.name, d.token);
+    const d = await NET.req('POST','/api/claim-account',{ name:srvName, token:legacy, password:pw });
+    NET.remember(srvName, d.token);
     try { localStorage.removeItem('toh_token'); } catch(_){}
     const r = await NET.resume();
     if(r){
@@ -2360,7 +2366,14 @@ $('claimForm').addEventListener('submit', async e => {
       authMsg('Password set — please sign in.','ok'); showAuth('signin');
     }
   } catch(err){
-    authMsg(err.message || 'Could not secure that save.');
+    // the save may predate the server entirely, or the account may already have a
+    // password — either way, offer the route that can actually work
+    if(err.status === 401){
+      authMsg('That save is not linked to a server account. Use CREATE ACCOUNT to start one, or SIGN IN if you already have a password.');
+      $('suName').value = srvName;
+    } else {
+      authMsg(err.message || 'Could not secure that save.');
+    }
   } finally { setAuthBusy(false); }
 });
 $('btnClaimSkip').onclick = () => {
@@ -2412,7 +2425,7 @@ async function signOutFromGame(){
 
   if(!saved.token && legacy && had && S.name){
     // a save from before accounts existed — offer to keep it
-    $('claimName').textContent = S.name;
+    $('claimName').textContent = serverNameFor(S.name);
     $('claimBox').classList.remove('hidden');
     $('signinForm').classList.add('hidden');
     $('signupForm').classList.add('hidden');
