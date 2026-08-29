@@ -1892,7 +1892,7 @@ function renderPanel(which, arg){
     const sorted=(S.npcs||[]).slice().sort((a,b)=>b.bounty-a.bounty);
     for(const n of sorted){
       const h=heroById(n.hero)||HEROES[0];
-      html += '<tr><td>'+n.name+(n.alive===false?' <span class="td" style="color:#5a6478">(down)</span>':'')+'</td>'+
+      html += '<tr><td>'+n.name+(n.alive===false?' <span class="td" style="color:#8b9ab5">(down)</span>':'')+'</td>'+
         '<td>'+h.name+' T'+(n.tier+1)+'</td><td>'+n.kills+'</td>'+
         '<td>'+(n.bounty?'<span class="badge">$'+fmt(n.bounty)+'</span>':'—')+'</td>'+
         '<td class="td">'+(n.bounty?n.by:'—')+'</td>'+
