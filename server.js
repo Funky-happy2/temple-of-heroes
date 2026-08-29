@@ -94,7 +94,13 @@ async function worldSnapshot(me) {
 /* ---------- middleware ---------- */
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '256kb' }));
-app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h', extensions: ['html'] }));
+// no-store on the HTML shell, revalidate assets: a deploy must reach players immediately
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: true, lastModified: true, maxAge: 0,
+  setHeaders(res, filePath){
+    res.setHeader('Cache-Control', filePath.endsWith('.html') ? 'no-store' : 'no-cache');
+  }
+}));
 
 /* ---------- routes ---------- */
 app.get('/api/health', async (req, res) => {

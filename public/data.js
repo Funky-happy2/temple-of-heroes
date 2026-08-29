@@ -294,13 +294,13 @@ const ZONES = [
 ];
 
 const ENEMIES = {
-  bandit: {n:'Bandit',        hp:60,  dmg:7,  spd:1.55, r:15, cash:38,  xp:1, col:'#7a5a3a', acc:'#3a2a1a', kind:'melee', range:40},
-  raider: {n:'Raider',        hp:78,  dmg:9,  spd:1.35, r:15, cash:62,  xp:1, col:'#6b4a4a', acc:'#2a1a1a', kind:'shot',  range:330},
-  drone:  {n:'Chitauri Drone',hp:96,  dmg:11, spd:1.85, r:15, cash:95,  xp:2, col:'#4a6b5a', acc:'#20302a', kind:'shot',  range:300},
-  beast:  {n:'Frost Beast',   hp:190, dmg:16, spd:1.30, r:22, cash:160, xp:3, col:'#5f86a8', acc:'#2a3f52', kind:'melee', range:52},
-  sentry: {n:'Ultron Sentry', hp:230, dmg:14, spd:1.60, r:17, cash:210, xp:4, col:'#8a8f9c', acc:'#3a3f4c', kind:'shot',  range:360},
-  wraith: {n:'Void Wraith',   hp:300, dmg:20, spd:2.10, r:18, cash:340, xp:5, col:'#6b4a9c', acc:'#2a1a4c', kind:'melee', range:56},
-  brute:  {n:'Symbiote Brute',hp:620, dmg:28, spd:1.10, r:30, cash:900, xp:9, col:'#1e1e28', acc:'#5a2a6a', kind:'melee', range:66, boss:true}
+  bandit: {n:'Bandit',        hp:60,  dmg:7,  spd:1.55, r:15, cash:38,  xp:1, col:'#9a7448', acc:'#4a3826', eye:'#ffd36b', kind:'melee', range:40},
+  raider: {n:'Raider',        hp:78,  dmg:9,  spd:1.35, r:15, cash:62,  xp:1, col:'#a35f52', acc:'#48282a', eye:'#ff9d6b', kind:'shot',  range:330},
+  drone:  {n:'Chitauri Drone',hp:96,  dmg:11, spd:1.85, r:15, cash:95,  xp:2, col:'#5f8f7a', acc:'#2e4a40', eye:'#8dff6b', kind:'shot',  range:300},
+  beast:  {n:'Frost Beast',   hp:190, dmg:16, spd:1.30, r:22, cash:160, xp:3, col:'#7ba3c9', acc:'#3d5c78', eye:'#8fe3ff', kind:'melee', range:52},
+  sentry: {n:'Ultron Sentry', hp:230, dmg:14, spd:1.60, r:17, cash:210, xp:4, col:'#9aa3b2', acc:'#4a5260', eye:'#ff5a5a', kind:'shot',  range:360},
+  wraith: {n:'Void Wraith',   hp:300, dmg:20, spd:2.10, r:18, cash:340, xp:5, col:'#7d5ab8', acc:'#3a2560', eye:'#e0a0ff', kind:'melee', range:56},
+  brute:  {n:'Symbiote Brute',hp:620, dmg:28, spd:1.10, r:30, cash:900, xp:9, col:'#3b3348', acc:'#b04ecf', eye:'#f2f6fc', kind:'melee', range:66, boss:true}
 };
 
 const NPC_NAMES = ['ZeroKnight','Blox_Titan','xX_Vibe_Xx','NoobSlayer','GammaGhost','PixelDoom',
